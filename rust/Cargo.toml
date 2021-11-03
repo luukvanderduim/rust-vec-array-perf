@@ -8,6 +8,11 @@ authors = ["supercurio"]
 # the the outputs' integrity
 write_buffers = []
 
-[dependencies]
-time = "*"
-byteorder = "1"
+
+[profile.release]
+debug-assertions = false
+codegen-units = 1
+opt-level = 3
+debug = 0
+lto = true
+overflow-checks = false  

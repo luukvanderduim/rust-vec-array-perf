@@ -25,7 +25,7 @@ using std::vector;
 // on each buffer during the benchmark
 #define FILTER_COUNT 100
 
-// #define WRITE_BUFFERS
+#define WRITE_BUFFERS
 
 // Square wave generator settings and status
 struct SquareWave {

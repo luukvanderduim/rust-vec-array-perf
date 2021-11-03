@@ -1,13 +1,15 @@
 # Rust Vector and Array performance differences
+
 This repository contains sample code showcasing differences in performance
 occuring on most platforms tested.
 
-Rust follows the philosophy of "zero-cost abstrations", which was introduced
+Rust follows the philosophy of "zero-cost abstractions", which was introduced
 with C++ to describe higher-level data structures and algorithms built in the
 language and its standard library providing the same performance as optimal
 low-level code.
 
 ## Code illustrating the issue
+
 The sample code provided in both stable
 [Rust](https://github.com/supercurio/rust-vec-array-perf/tree/master/rust) and
 [C++11](https://github.com/supercurio/rust-vec-array-perf/tree/master/cpp)
@@ -25,7 +27,8 @@ you can find benchmarks of the Rust and C++ implementation compiled for with
 arm, armv7, aarch64 architectures, GCC and Clang compilers.
 
 ## Observations
-* The same algoritm working on an Array-backed buffer is usually 20% to 60%
+
+* The same algorithm working on an Array-backed buffer is usually 20% to 60%
   faster than with a Vector-backed buffer
 * Two most recently designed CPUs (1 Intel, 1 ARM64) tested perform
   identically between Array and Vector buffers
@@ -35,6 +38,7 @@ arm, armv7, aarch64 architectures, GCC and Clang compilers.
   and ARM processors
 
 ## Rust compared to C++
+
 * Rust performance is comparable to C++ overall
 * On the systems exhibiting the Vector/Array perf difference:
   * Rust Vector is slower than GCC C++ Vector

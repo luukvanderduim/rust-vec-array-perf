@@ -1,21 +1,8 @@
-extern crate time;
-#[cfg(feature = "write_buffers")]
-extern crate byteorder;
-
 use std::f64::consts::PI;
-use time::precise_time_ns;
+use std::time::Instant;
 
 #[cfg(feature = "write_buffers")]
-use std::io::BufWriter;
-#[cfg(feature = "write_buffers")]
-use std::io::prelude::*;
-#[cfg(feature = "write_buffers")]
-use std::fs::File;
-#[cfg(feature = "write_buffers")]
-use std::path::Path;
-#[cfg(feature = "write_buffers")]
-use byteorder::{WriteBytesExt, LittleEndian};
-
+use std::{fs::File, io::BufWriter, io::Write, path::Path};
 
 /// Audio sample rate for the test set, used for realtime speed
 /// calculation
@@ -28,7 +15,6 @@ const SAMPLE_COUNT: u64 = 524288;
 /// on each buffer during the benchmark
 const FILTER_COUNT: usize = 100;
 
-
 /// Square wave generator
 struct SquareWave {
     switch_samples: usize,
@@ -38,8 +24,8 @@ struct SquareWave {
 
 impl SquareWave {
     /// Builds a new `SquareWave` initialized with the oscillator frequency
-    fn new(frequency: f64) -> SquareWave {
-        SquareWave {
+    fn new(frequency: f64) -> Self {
+        Self {
             switch_samples: (SAMPLE_RATE / frequency / 2.0).round() as usize,
             status: false,
             progress: 0,
@@ -52,9 +38,8 @@ impl SquareWave {
     }
 }
 
-
 /// 2nd order biquad filter
-#[derive(Copy)]
+#[derive(Copy, Clone, Default)]
 struct Biquad {
     b0: f64,
     b1: f64,
@@ -68,25 +53,9 @@ struct Biquad {
     y2: f64,
 }
 
-impl Clone for Biquad {
-    fn clone(&self) -> Biquad {
-        *self
-    }
-}
-
 impl Biquad {
-    fn new() -> Biquad {
-        Biquad {
-            b0: 0.0,
-            b1: 0.0,
-            b2: 0.0,
-            a1: 0.0,
-            a2: 0.0,
-            x1: 0.0,
-            x2: 0.0,
-            y1: 0.0,
-            y2: 0.0,
-        }
+    fn new() -> Self {
+        Self::default()
     }
 
     /// Calculate coefficients and initialize the `Biquad` struct following
@@ -94,26 +63,17 @@ impl Biquad {
     fn peak_eq(fs: f64, f0: f64, q: f64, db_gain: f64) -> Biquad {
         let a = 10.0_f64.powf(db_gain / 40.0);
         let omega = 2.0 * PI * f0 / fs;
-
         let alpha = omega.sin() / (2.0 * q);
 
         let a0 = 1.0 + alpha / a;
 
-        let b0 = (1.0 + alpha * a) / a0;
-        let b1 = (-2.0 * omega.cos()) / a0;
-        let b2 = (1.0 - alpha * a) / a0;
-        let a2 = (1.0 - alpha / a) / a0;
-
         Biquad {
-            b0: b0,
-            b1: b1,
-            b2: b2,
-            a1: b1,
-            a2: a2,
-            x1: 0.0,
-            x2: 0.0,
-            y1: 0.0,
-            y2: 0.0,
+            b0: (1.0 + alpha * a) / a0,
+            b1: (-2.0 * omega.cos()) / a0,
+            b2: (1.0 - alpha * a) / a0,
+            a1: (-2.0 * omega.cos()) / a0,
+            a2: (1.0 - alpha / a) / a0,
+            ..Biquad::default()
         }
     }
 
@@ -133,17 +93,13 @@ fn reset_biquads(biquads: &mut [Biquad]) {
     }
 }
 
-
 /// Generate a buffer as `Vec` of a defined size
 fn get_buffer_vec(length: usize) -> Vec<f64> {
-    let mut vec: Vec<f64> = Vec::new();
-    vec.resize(length, 0.0);
-    vec
+    vec![0.0; length]
 }
 
-
 macro_rules! create_fill_buffer_function {
-    ($func:ident) => (
+    ($func:ident) => {
         /// Fills the provided buffer using `SquareWave` generator
         fn $func(buf: &mut [f64], sqw: &mut SquareWave) {
             for sample in buf {
@@ -156,7 +112,7 @@ macro_rules! create_fill_buffer_function {
                 sqw.progress += 1;
             }
         }
-    )
+    };
 }
 
 #[cfg(feature = "write_buffers")]
@@ -187,32 +143,30 @@ impl OutputPcmFile {
     /// Write the provided buffer to disk
     fn write_buffer(&mut self, buf: &[f64]) {
         for sample in buf {
-            let mut wtr = vec![];
-            wtr.write_f64::<LittleEndian>(*sample).unwrap();
-            self.writer.write(wtr.as_slice()).unwrap();
+            self.writer
+                .write(sample.to_le_bytes().as_ref())
+                .expect("failed to write buffer");
         }
     }
 }
 
-
 /// Displays the benchmark timing results and a real-time performance estimate
-fn print_elapsed(msg: &str, start: u64, filter_count: usize) {
-    let elapsed = precise_time_ns() - start;
-    let duration = elapsed as f64 / filter_count as f64 / SAMPLE_COUNT as f64;
+fn print_elapsed(msg: &str, start: Instant, filter_count: usize) {
+    let elapsed = Instant::now() - start;
+    let duration = elapsed.as_nanos() as f64 / filter_count as f64 / SAMPLE_COUNT as f64;
     let realtime = 1.0 / duration / SAMPLE_RATE * 1e+9;
     println!("\t{}:\t{:.3} ns\t{:.0}x realtime", msg, duration, realtime);
 }
 
-
 macro_rules! create_iir_function {
-    ($func:ident) => (
+    ($func:ident) => {
         /// Apply the supplied `Biquad` digital filter coefficients using a
         /// Direct Form 2 IIR digital filter on the provided buffer
         fn $func(buf: &mut [f64], bq: &mut Biquad) {
             for y in buf {
                 let x = *y;
-                *y = (bq.b0 * x) + (bq.b1 * bq.x1) +  (bq.b2 * bq.x2)
-                     - (bq.a1 * bq.y1) - (bq.a2 * bq.y2);
+                *y = (bq.b0 * x) + (bq.b1 * bq.x1) + (bq.b2 * bq.x2)
+                    - bq.a1.mul_add(bq.y1, -(bq.a2 * bq.y2));
 
                 bq.x2 = bq.x1;
                 bq.x1 = x;
@@ -221,9 +175,8 @@ macro_rules! create_iir_function {
                 bq.y1 = *y;
             }
         }
-    )
+    };
 }
-
 
 // Create fill_buffer, iir,  unique fill_buffer_size and iir_size functions
 //
@@ -262,7 +215,6 @@ create_iir_function!(iir_1024);
 create_iir_function!(iir_2048);
 create_iir_function!(iir_4096);
 
-
 fn main() {
     println!("Rust Vector and Array performance comparison");
 
@@ -278,15 +230,15 @@ fn main() {
     // by 64-bit calculations
     let mut biquad_gain_positive = true;
     let mut biquads = [Biquad::new(); FILTER_COUNT];
-    for i in 0..FILTER_COUNT {
+    for biquad in biquads.iter_mut() {
         let db_gain = if biquad_gain_positive { 2.0 } else { -2.0 };
         biquad_gain_positive = !biquad_gain_positive;
-        biquads[i] = Biquad::peak_eq(SAMPLE_RATE, 50.0, 0.3, db_gain);
+        *biquad = Biquad::peak_eq(SAMPLE_RATE, 50.0, 0.3, db_gain);
     }
 
-    /// Iterate over buffer sizes
+    // Iterate over buffer sizes
     for i in 3..BUFFER_LEN_TESTS {
-        let buffer_len = (2_u64).pow(i) as usize;
+        let buffer_len: usize = 1 << i as usize;
         let buffer_count = SAMPLE_COUNT / buffer_len as u64;
 
         println!("\nBuffer size: {} samples", buffer_len);
@@ -300,11 +252,11 @@ fn main() {
             let mut output = OutputPcmFile::new(format!("sized_vector_{}", buffer_len));
 
             let mut buf = get_buffer_vec(buffer_len);
-            let start = precise_time_ns();
+            let start = Instant::now();
             for _ in 0..buffer_count {
                 fill_buffer(buf.as_mut_slice(), &mut sqw);
-                for f in 0..FILTER_COUNT {
-                    iir(buf.as_mut_slice(), &mut biquads[f]);
+                for biquad in biquads.iter_mut() {
+                    iir(&mut buf, biquad);
                 }
 
                 #[cfg(feature = "write_buffers")]
@@ -322,11 +274,11 @@ fn main() {
             let mut output = OutputPcmFile::new(format!("array_slice_{}", buffer_len));
 
             let mut buf = [0.0; 4096];
-            let start = precise_time_ns();
+            let start = Instant::now();
             for _ in 0..buffer_count {
                 fill_buffer(&mut buf[0..buffer_len], &mut sqw);
-                for f in 0..FILTER_COUNT {
-                    iir(&mut buf[..buffer_len], &mut biquads[f]);
+                for biquad in biquads.iter_mut() {
+                    iir(&mut buf[..buffer_len], biquad);
                 }
 
                 #[cfg(feature = "write_buffers")]
@@ -346,11 +298,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 8];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_8(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_8(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_8(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -364,11 +316,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 16];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_16(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_16(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_16(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -382,11 +334,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 32];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_32(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_32(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_32(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -400,11 +352,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 64];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_64(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_64(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_64(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -418,11 +370,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 128];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_128(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_128(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_128(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -436,11 +388,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 256];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_256(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_256(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_256(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -454,11 +406,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 512];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_512(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_512(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_512(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -472,11 +424,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 1024];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_1024(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_1024(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_1024(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -490,11 +442,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 2048];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_2048(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_2048(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_2048(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
@@ -508,11 +460,11 @@ fn main() {
                     let mut output = OutputPcmFile::new(format!("whole_array_{}", buffer_len));
 
                     let mut buf = [0.0; 4096];
-                    let start = precise_time_ns();
+                    let start = Instant::now();
                     for _ in 0..buffer_count {
                         fill_buffer_4096(&mut buf, &mut sqw);
-                        for f in 0..FILTER_COUNT {
-                            iir_4096(&mut buf, &mut biquads[f]);
+                        for biquad in biquads.iter_mut() {
+                            iir_4096(&mut buf, biquad);
                         }
 
                         #[cfg(feature = "write_buffers")]
